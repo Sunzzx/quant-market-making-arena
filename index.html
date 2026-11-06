@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quant Market Making Arena | High-Frequency LOB Simulator</title>
+  <meta name="description" content="Master high-frequency market making. Control Avellaneda-Stoikov inventory skew, survive market shocks, and harvest the bid-ask spread in real-time.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'monospace'],
+            sans: ['Plus Jakarta Sans', 'sans-serif'],
+          },
+          colors: {
+            dark: { 900: '#070a10', 800: '#0c101a', 700: '#141b2a', 600: '#1e283d' },
+            quant: { green: '#00f59b', red: '#ff3b69', cyan: '#00e5ff', gold: '#ffd600' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #070a10; color: #e2e8f0; }
+    .glow-green { text-shadow: 0 0 10px rgba(0, 245, 155, 0.4); }
+    .glow-red { text-shadow: 0 0 10px rgba(255, 59, 105, 0.4); }
+    .glow-box { box-shadow: 0 0 25px -5px rgba(0, 229, 255, 0.15); }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0c101a; }
+    ::-webkit-scrollbar-thumb { background: #1e283d; border-radius: 3px; }
+  </style>
+</head>
+<body class="font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-quant-cyan selection:text-black">
+
+  <!-- TOP TICKER & NAV -->
+  <header class="border-b border-dark-600/60 bg-dark-800/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-quant-cyan to-quant-green flex items-center justify-center font-bold text-black font-mono shadow-lg shadow-quant-cyan/20">
+          Ω
+        </div>
+        <div>
+          <span class="font-extrabold text-white tracking-wider text-lg">ALPHA<span class="text-quant-green">ARENA</span></span>
+          <span class="ml-2 text-xs font-mono uppercase bg-quant-cyan/10 text-quant-cyan px-2 py-0.5 rounded border border-quant-cyan/20">HFT Sim v1.0</span>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <div class="hidden sm:flex items-center space-x-6 text-xs font-mono">
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-quant-green animate-pulse"></span>
+            <span class="text-gray-400">ORDER FLOW: <strong class="text-white">POISSON JUMP-DIFFUSION</strong></span>
+          </div>
+          <div>
+            <span class="text-gray-400">ROUNDS: </span>
+            <span id="rounds-badge" class="font-bold text-quant-cyan">0 / 3 FREE</span>
+          </div>
+        </div>
+        <button id="upgrade-cta-nav" class="text-xs font-bold font-mono px-4 py-2 rounded-lg bg-gradient-to-r from-quant-green to-quant-cyan text-black hover:opacity-90 transition shadow-md shadow-quant-green/20">
+          UNLOCK PRO ($19)
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN SIMULATOR CONTAINER -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full flex-1">
+    
+    <!-- STATS BANNER -->
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Total PnL</div>
+        <div id="stat-pnl" class="text-xl md:text-2xl font-bold font-mono text-quant-green glow-green mt-0.5">+$0.00</div>
+      </div>
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Net Inventory ($q)</div>
+        <div id="stat-inventory" class="text-xl md:text-2xl font-bold font-mono text-white mt-0.5">0</div>
+      </div>
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Sharpe Ratio</div>
+        <div id="stat-sharpe" class="text-xl md:text-2xl font-bold font-mono text-quant-cyan mt-0.5">0.00</div>
+      </div>
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Spread Harvested</div>
+        <div id="stat-spread-captured" class="text-xl md:text-2xl font-bold font-mono text-white mt-0.5">$0.00</div>
+      </div>
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Fills / Flow</div>
+        <div id="stat-fills" class="text-xl md:text-2xl font-bold font-mono text-white mt-0.5">0 <span class="text-xs text-gray-500 font-normal">/ 0</span></div>
+      </div>
+      <div class="bg-dark-800 border border-dark-600/70 p-3.5 rounded-xl">
+        <div class="text-[11px] font-mono text-gray-400 uppercase tracking-wide">Max Drawdown</div>
+        <div id="stat-max-dd" class="text-xl md:text-2xl font-bold font-mono text-quant-red mt-0.5">0.00%</div>
+      </div>
+    </div>
+
+    <!-- MAIN INTERACTIVE ARENA -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      
+      <!-- LEFT: VISUAL ORDER BOOK & CHART (7 COLS) -->
+      <div class="lg:col-span-7 flex flex-col space-y-6">
+        
+        <!-- CANVAS CONTAINER: ORDER BOOK DEPTH -->
+        <div class="bg-dark-800 border border-dark-600 rounded-2xl p-4 glow-box flex flex-col">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center space-x-2">
+              <span class="font-mono text-xs uppercase tracking-wider text-quant-cyan font-semibold">Limit Order Book & Spread Matrix</span>
+              <span id="market-regime-tag" class="text-[10px] font-mono px-2 py-0.5 bg-dark-700 rounded text-gray-300 border border-dark-600">NORMAL FLOW</span>
+            </div>
+            <div class="flex items-center space-x-3 text-xs font-mono">
+              <span class="text-gray-400">MID: <strong id="mid-price" class="text-white">$100.00</strong></span>
+              <span class="text-gray-400">SPREAD: <strong id="spread-display" class="text-quant-green">$0.04</strong></span>
+            </div>
+          </div>
+          <div class="relative w-full h-[260px] bg-dark-900 rounded-xl overflow-hidden border border-dark-700">
+            <canvas id="orderbook-canvas" class="w-full h-full block"></canvas>
+            <div id="shock-alert" class="hidden absolute top-2 right-2 bg-quant-red/20 border border-quant-red text-quant-red px-3 py-1 rounded text-xs font-mono font-bold animate-bounce">
+              ⚠️ INSTITUTIONAL SWEEP DETECTED
+            </div>
+          </div>
+        </div>
+
+        <!-- PNL ACCUMULATION CURVE -->
+        <div class="bg-dark-800 border border-dark-600 rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-mono text-xs uppercase tracking-wider text-gray-300 font-semibold">Real-Time PnL Equity Curve</span>
+            <span class="font-mono text-xs text-gray-500">Ticks: <span id="tick-counter" class="text-gray-300">0</span></span>
+          </div>
+          <div class="relative w-full h-[150px] bg-dark-900 rounded-xl overflow-hidden border border-dark-700">
+            <canvas id="equity-canvas" class="w-full h-full block"></canvas>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT: CONTROLS & AVELLANEDA-STOIKOV PARAMETERS (5 COLS) -->
+      <div class="lg:col-span-5 flex flex-col space-y-5">
+        
+        <div class="bg-dark-800 border border-dark-600 rounded-2xl p-5 flex flex-col justify-between flex-1">
+          <div>
+            <div class="flex items-center justify-between pb-3 border-b border-dark-700 mb-4">
+              <h2 class="text-sm font-mono uppercase tracking-wider text-white font-bold flex items-center">
+                <svg class="w-4 h-4 mr-2 text-quant-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                Market Maker Controls
+              </h2>
+              <span class="text-[11px] font-mono text-gray-400">Avellaneda-Stoikov (2008)</span>
+            </div>
+
+            <!-- CONTROL SLIDER 1: HALF-SPREAD -->
+            <div class="mb-4">
+              <div class="flex justify-between text-xs font-mono mb-1.5">
+                <span class="text-gray-300">Quote Half-Spread ($\delta$)</span>
+                <span id="label-spread" class="text-quant-green font-bold">$0.02 (2 bps)</span>
+              </div>
+              <input id="param-spread" type="range" min="1" max="10" value="2" step="1" class="w-full accent-quant-green bg-dark-700 rounded-lg h-2 cursor-pointer">
+              <p class="text-[11px] text-gray-500 mt-1">Tighter quotes increase fill frequency but heighten adverse selection.</p>
+            </div>
+
+            <!-- CONTROL SLIDER 2: INVENTORY RISK AVERSION (GAMMA) -->
+            <div class="mb-4">
+              <div class="flex justify-between text-xs font-mono mb-1.5">
+                <span class="text-gray-300">Inventory Skew Penalty ($\gamma$)</span>
+                <span id="label-gamma" class="text-quant-cyan font-bold">0.50</span>
+              </div>
+              <input id="param-gamma" type="range" min="0" max="100" value="50" step="5" class="w-full accent-quant-cyan bg-dark-700 rounded-lg h-2 cursor-pointer">
+              <p class="text-[11px] text-gray-500 mt-1">Shifts reservation price $r(s,q) = s - q\gamma\sigma^2(T-t)$ to offload toxic inventory.</p>
+            </div>
+
+            <!-- CONTROL SLIDER 3: ORDER SIZE -->
+            <div class="mb-4">
+              <div class="flex justify-between text-xs font-mono mb-1.5">
+                <span class="text-gray-300">Quote Depth / Size ($q$)</span>
+                <span id="label-size" class="text-white font-bold">100 shares</span>
+              </div>
+              <input id="param-size" type="range" min="50" max="500" value="100" step="25" class="w-full accent-white bg-dark-700 rounded-lg h-2 cursor-pointer">
+            </div>
+
+            <!-- AUTO-HEDGING TOGGLE -->
+            <div class="p-3 bg-dark-700/50 rounded-xl border border-dark-600 flex items-center justify-between mb-4">
+              <div>
+                <div class="text-xs font-mono font-semibold text-white">Delta Auto-Hedge</div>
+                <div class="text-[11px] text-gray-400">Market-sell inventory if $|q| > 300$</div>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input id="toggle-hedge" type="checkbox" checked class="sr-only peer">
+                <div class="w-11 h-6 bg-dark-900 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-quant-green"></div>
+              </label>
+            </div>
+
+            <!-- MARKET REGIME SWITCH -->
+            <div class="mb-4">
+              <span class="text-xs font-mono text-gray-300 block mb-1.5">Market Simulation Regime:</span>
+              <div class="grid grid-cols-3 gap-2">
+                <button class="regime-btn active py-2 text-xs font-mono rounded-lg border border-quant-cyan bg-quant-cyan/10 text-quant-cyan font-bold transition" data-regime="normal">Normal</button>
+                <button class="regime-btn py-2 text-xs font-mono rounded-lg border border-dark-600 bg-dark-700 text-gray-400 hover:text-white transition" data-regime="volatile">Flash Crash</button>
+                <button class="regime-btn py-2 text-xs font-mono rounded-lg border border-dark-600 bg-dark-700 text-gray-400 hover:text-white transition" data-regime="sweep">Institutional</button>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- PRIMARY ACTION BUTTONS -->
+          <div class="pt-4 border-t border-dark-700 space-y-2">
+            <button id="btn-start" class="w-full py-3.5 rounded-xl font-mono font-bold text-sm bg-gradient-to-r from-quant-green to-quant-cyan text-black hover:opacity-90 transition shadow-lg shadow-quant-green/20">
+              ▶ START MARKET MAKING ROUND
+            </button>
+            <div class="flex space-x-2">
+              <button id="btn-pause" disabled class="flex-1 py-2 text-xs font-mono rounded-lg border border-dark-600 bg-dark-700 text-gray-400 hover:text-white disabled:opacity-40 transition">
+                ⏸ PAUSE
+              </button>
+              <button id="btn-reset" class="flex-1 py-2 text-xs font-mono rounded-lg border border-dark-600 bg-dark-700 text-gray-400 hover:text-white transition">
+                ↺ RESET
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- REVENUE / VALUE EXPLANATION CARDS -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mt-10 pt-10 border-t border-dark-600/50">
+      <div class="bg-dark-800/60 p-5 rounded-2xl border border-dark-700">
+        <div class="w-8 h-8 rounded-lg bg-quant-cyan/10 border border-quant-cyan/20 flex items-center justify-center text-quant-cyan font-mono font-bold mb-3">01</div>
+        <h3 class="font-mono text-sm font-bold text-white mb-1.5">Microstructure Math</h3>
+        <p class="text-xs text-gray-400 leading-relaxed">
+          Simulates authentic limit order books with Poisson arrival intensities $\lambda(A) = A e^{-k\delta}$ and adverse selection shocks.
+        </p>
+      </div>
+      <div class="bg-dark-800/60 p-5 rounded-2xl border border-dark-700">
+        <div class="w-8 h-8 rounded-lg bg-quant-green/10 border border-quant-green/20 flex items-center justify-center text-quant-green font-mono font-bold mb-3">02</div>
+        <h3 class="font-mono text-sm font-bold text-white mb-1.5">Avellaneda-Stoikov Tuning</h3>
+        <p class="text-xs text-gray-400 leading-relaxed">
+          Watch your reservation price dynamically shade away from inventory risk to avoid getting caught on the wrong side of toxic momentum.
+        </p>
+      </div>
+      <div class="bg-dark-800/60 p-5 rounded-2xl border border-dark-700">
+        <div class="w-8 h-8 rounded-lg bg-quant-gold/10 border border-quant-gold/20 flex items-center justify-center text-quant-gold font-mono font-bold mb-3">03</div>
+        <h3 class="font-mono text-sm font-bold text-white mb-1.5">Export to Python Bot</h3>
+        <p class="text-xs text-gray-400 leading-relaxed">
+          Export your calibrated $\gamma$ and $\delta$ parameters into production CCXT / Binance asynchronous market-making bots in 1 click.
+        </p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- PAYWALL / PRO UPGRADE MODAL -->
+  <div id="pro-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-dark-800 border border-dark-600 rounded-3xl p-6 sm:p-8 max-w-lg w-full relative glow-box">
+      <button id="modal-close" class="absolute top-4 right-4 text-gray-400 hover:text-white font-mono text-lg">✕</button>
+      
+      <div class="text-center mb-6">
+        <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-quant-cyan to-quant-green flex items-center justify-center font-mono font-extrabold text-black text-2xl mb-4 shadow-xl shadow-quant-green/20">
+          Ω
+        </div>
+        <h2 class="text-2xl font-bold font-sans text-white">Unlock Quant Arena Pro</h2>
+        <p class="text-xs font-mono text-quant-cyan mt-1">Unlimited Simulations + Live Bot Code Exporter</p>
+      </div>
+
+      <div class="space-y-3 mb-6 font-mono text-xs text-gray-300">
+        <div class="flex items-center space-x-2.5 bg-dark-700/60 p-2.5 rounded-xl border border-dark-600">
+          <span class="text-quant-green">✓</span>
+          <span><strong>Unlimited Daily Simulations</strong> & Historical Crash Replays</span>
+        </div>
+        <div class="flex items-center space-x-2.5 bg-dark-700/60 p-2.5 rounded-xl border border-dark-600">
+          <span class="text-quant-green">✓</span>
+          <span><strong>Ready-to-Deploy Python CCXT Script</strong> with your tuned parameters</span>
+        </div>
+        <div class="flex items-center space-x-2.5 bg-dark-700/60 p-2.5 rounded-xl border border-dark-600">
+          <span class="text-quant-green">✓</span>
+          <span><strong>Level-3 Full LOB Visualizer</strong> & Order Flow Toxicity Gauge (VPIN)</span>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <a href="https://buy.stripe.com/test_eVaeVxg7C7X6gJG144" target="_blank" class="block w-full text-center py-3.5 rounded-xl font-mono font-bold text-sm bg-gradient-to-r from-quant-green to-quant-cyan text-black hover:opacity-90 transition shadow-lg shadow-quant-green/25">
+          BUY PRO LICENSE — $19 (LIFETIME)
+        </a>
+        <div class="flex items-center justify-center space-x-2 text-[11px] font-mono text-gray-400">
+          <span>Instant access • 100% money-back guarantee • Stripe verified</span>
+        </div>
+      </div>
+
+      <!-- LEAD CAPTURE FORM -->
+      <div class="mt-6 pt-5 border-t border-dark-700">
+        <div class="text-[11px] font-mono text-gray-400 text-center mb-2">Or get the Free 14-Page Quant Market Making Guide:</div>
+        <form id="lead-form" class="flex space-x-2">
+          <input type="email" required placeholder="Enter your email" class="flex-1 bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-gray-500 focus:outline-none focus:border-quant-cyan">
+          <button type="submit" class="px-4 py-2 bg-dark-700 hover:bg-dark-600 border border-dark-600 rounded-lg text-xs font-mono text-white transition">Get PDF</button>
+        </form>
+        <div id="lead-success" class="hidden text-center text-xs font-mono text-quant-green mt-2">✓ Guide dispatched to your inbox!</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-dark-600/60 bg-dark-800/40 py-6 text-xs font-mono text-gray-500">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between space-y-2 sm:space-y-0">
+      <div>Created by <a href="https://sunzzx.github.io/ayush-kandwal-portfolio/" class="text-gray-400 hover:text-white transition font-semibold">Ayush Kandwal (@Sunzzx)</a> — AI & Quant Researcher</div>
+      <div class="flex space-x-4">
+        <a href="https://github.com/Sunzzx/quant-market-making-arena" class="hover:text-white transition">GitHub Repo</a>
+        <a href="https://quant-volatility-surface-api.vercel.app" class="hover:text-white transition">Quant API</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- SIMULATOR JAVASCRIPT ENGINE -->
+  <script>
+    // AUDIO SYNTHESIS
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(freq, type = 'sine', duration = 0.05) {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    // STATE
+    const state = {
+      isRunning: false,
+      tick: 0,
+      midPrice: 100.00,
+      pnl: 0.00,
+      cash: 0.00,
+      inventory: 0,
+      spreadCaptured: 0.00,
+      fills: 0,
+      totalOrders: 0,
+      peakEquity: 0.00,
+      maxDrawdown: 0.00,
+      regime: 'normal',
+      halfSpreadBps: 2,
+      gamma: 0.50,
+      quoteSize: 100,
+      autoHedge: true,
+      roundsPlayed: parseInt(localStorage.getItem('alpha_arena_rounds') || '0', 10),
+      equityHistory: [0],
+      bids: [],
+      asks: []
+    };
+
+    // DOM ELEMENTS
+    const canvasLOB = document.getElementById('orderbook-canvas');
+    const ctxLOB = canvasLOB.getContext('2d');
+    const canvasEquity = document.getElementById('equity-canvas');
+    const ctxEquity = canvasEquity.getContext('2d');
+
+    const statPnl = document.getElementById('stat-pnl');
+    const statInventory = document.getElementById('stat-inventory');
+    const statSharpe = document.getElementById('stat-sharpe');
+    const statSpread = document.getElementById('stat-spread-captured');
+    const statFills = document.getElementById('stat-fills');
+    const statMaxDd = document.getElementById('stat-max-dd');
+    const midPriceEl = document.getElementById('mid-price');
+    const spreadDisplayEl = document.getElementById('spread-display');
+    const tickCounterEl = document.getElementById('tick-counter');
+    const shockAlert = document.getElementById('shock-alert');
+    const roundsBadge = document.getElementById('rounds-badge');
+
+    const btnStart = document.getElementById('btn-start');
+    const btnPause = document.getElementById('btn-pause');
+    const btnReset = document.getElementById('btn-reset');
+    const proModal = document.getElementById('pro-modal');
+    const modalClose = document.getElementById('modal-close');
+    const upgradeCtaNav = document.getElementById('upgrade-cta-nav');
+
+    // RESIZE CANVAS
+    function resizeCanvases() {
+      canvasLOB.width = canvasLOB.parentElement.clientWidth;
+      canvasLOB.height = canvasLOB.parentElement.clientHeight;
+      canvasEquity.width = canvasEquity.parentElement.clientWidth;
+      canvasEquity.height = canvasEquity.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resizeCanvases);
+    resizeCanvases();
+
+    // UPDATE ROUNDS BADGE
+    function updateRoundsBadge() {
+      roundsBadge.textContent = `${state.roundsPlayed} / 3 FREE`;
+    }
+    updateRoundsBadge();
+
+    // CONTROLS BINDING
+    const paramSpread = document.getElementById('param-spread');
+    const paramGamma = document.getElementById('param-gamma');
+    const paramSize = document.getElementById('param-size');
+    const toggleHedge = document.getElementById('toggle-hedge');
+
+    paramSpread.addEventListener('input', (e) => {
+      state.halfSpreadBps = parseInt(e.target.value, 10);
+      document.getElementById('label-spread').textContent = `$${(state.halfSpreadBps * 0.01).toFixed(2)} (${state.halfSpreadBps} bps)`;
+    });
+
+    paramGamma.addEventListener('input', (e) => {
+      state.gamma = parseInt(e.target.value, 10) / 100;
+      document.getElementById('label-gamma').textContent = state.gamma.toFixed(2);
+    });
+
+    paramSize.addEventListener('input', (e) => {
+      state.quoteSize = parseInt(e.target.value, 10);
+      document.getElementById('label-size').textContent = `${state.quoteSize} shares`;
+    });
+
+    toggleHedge.addEventListener('change', (e) => {
+      state.autoHedge = e.target.checked;
+    });
+
+    document.querySelectorAll('.regime-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.regime-btn').forEach(b => {
+          b.classList.remove('active', 'border-quant-cyan', 'bg-quant-cyan/10', 'text-quant-cyan');
+          b.classList.add('border-dark-600', 'bg-dark-700', 'text-gray-400');
+        });
+        btn.classList.add('active', 'border-quant-cyan', 'bg-quant-cyan/10', 'text-quant-cyan');
+        btn.classList.remove('border-dark-600', 'bg-dark-700', 'text-gray-400');
+        state.regime = btn.dataset.regime;
+        document.getElementById('market-regime-tag').textContent = `${state.regime.toUpperCase()} FLOW`;
+      });
+    });
+
+    // ORDER BOOK INITIALIZATION
+    function generateOrderBook() {
+      state.bids = [];
+      state.asks = [];
+      const halfSpread = state.halfSpreadBps * 0.01;
+      
+      // Reservation price skew: r = mid - q * gamma * 0.005
+      const reservationSkew = state.inventory * state.gamma * 0.002;
+      const myBid = state.midPrice - halfSpread - reservationSkew;
+      const myAsk = state.midPrice + halfSpread - reservationSkew;
+
+      for (let i = 0; i < 7; i++) {
+        state.bids.push({
+          price: (myBid - i * 0.01).toFixed(2),
+          size: Math.floor(80 + Math.random() * 200),
+          isMine: (i === 0)
+        });
+        state.asks.push({
+          price: (myAsk + i * 0.01).toFixed(2),
+          size: Math.floor(80 + Math.random() * 200),
+          isMine: (i === 0)
+        });
+      }
+      spreadDisplayEl.textContent = `$${(myAsk - myBid).toFixed(2)}`;
+    }
+
+    // SIMULATION LOOP
+    let simInterval = null;
+
+    function tick() {
+      state.tick++;
+      tickCounterEl.textContent = state.tick;
+
+      // Price Dynamics (GBM + jump)
+      let vol = 0.02;
+      if (state.regime === 'volatile') vol = 0.08;
+      if (state.regime === 'sweep') vol = 0.05;
+
+      const drift = (Math.random() - 0.5) * vol;
+      state.midPrice = Math.max(10.0, state.midPrice + drift);
+
+      // Poisson Jump (Shock)
+      if (Math.random() < (state.regime === 'volatile' ? 0.08 : 0.015)) {
+        const shock = (Math.random() - 0.5) * 0.40;
+        state.midPrice += shock;
+        shockAlert.classList.remove('hidden');
+        playBeep(220, 'sawtooth', 0.15);
+        setTimeout(() => shockAlert.classList.add('hidden'), 800);
+      }
+
+      midPriceEl.textContent = `$${state.midPrice.toFixed(2)}`;
+
+      // Inflow order matching (Noise + Informed traders)
+      state.totalOrders++;
+      const isBuyFlow = Math.random() < 0.5;
+      const fillProbability = 0.45 / (1 + state.halfSpreadBps * 0.2);
+
+      if (Math.random() < fillProbability) {
+        state.fills++;
+        if (isBuyFlow) {
+          // Trader bought from my Ask
+          const myAskPrice = parseFloat(state.asks[0].price);
+          state.cash += myAskPrice * state.quoteSize;
+          state.inventory -= state.quoteSize;
+          state.spreadCaptured += (myAskPrice - state.midPrice) * state.quoteSize;
+          playBeep(880, 'sine', 0.03);
+        } else {
+          // Trader sold to my Bid
+          const myBidPrice = parseFloat(state.bids[0].price);
+          state.cash -= myBidPrice * state.quoteSize;
+          state.inventory += state.quoteSize;
+          state.spreadCaptured += (state.midPrice - myBidPrice) * state.quoteSize;
+          playBeep(660, 'sine', 0.03);
+        }
+      }
+
+      // Auto-hedge inventory risk if enabled
+      if (state.autoHedge && Math.abs(state.inventory) > 300) {
+        const hedgeSize = Math.abs(state.inventory) - 100;
+        if (state.inventory > 0) {
+          state.cash += state.midPrice * hedgeSize;
+          state.inventory -= hedgeSize;
+        } else {
+          state.cash -= state.midPrice * hedgeSize;
+          state.inventory += hedgeSize;
+        }
+        playBeep(440, 'triangle', 0.08);
+      }
+
+      // Calculate Net Total PnL (Cash + Marked-to-Market Inventory)
+      const mtmValue = state.inventory * state.midPrice;
+      state.pnl = state.cash + mtmValue;
+
+      // Drawdown & peak equity
+      if (state.pnl > state.peakEquity) state.peakEquity = state.pnl;
+      const dd = state.peakEquity > 0 ? ((state.peakEquity - state.pnl) / state.peakEquity) * 100 : 0;
+      if (dd > state.maxDrawdown) state.maxDrawdown = dd;
+
+      state.equityHistory.push(state.pnl);
+      if (state.equityHistory.length > 120) state.equityHistory.shift();
+
+      generateOrderBook();
+      renderUI();
+      renderLOB();
+      renderEquity();
+
+      // Check round completion (every 100 ticks = 1 round)
+      if (state.tick % 100 === 0) {
+        state.roundsPlayed++;
+        localStorage.setItem('alpha_arena_rounds', state.roundsPlayed);
+        updateRoundsBadge();
+        if (state.roundsPlayed >= 3) {
+          pauseSim();
+          proModal.classList.remove('hidden');
+        }
+      }
+    }
+
+    // RENDER METRICS
+    function renderUI() {
+      statPnl.textContent = `${state.pnl >= 0 ? '+' : ''}$${state.pnl.toFixed(2)}`;
+      statPnl.className = `text-xl md:text-2xl font-bold font-mono mt-0.5 ${state.pnl >= 0 ? 'text-quant-green glow-green' : 'text-quant-red glow-red'}`;
+      statInventory.textContent = `${state.inventory > 0 ? '+' : ''}${state.inventory}`;
+      statSpread.textContent = `$${state.spreadCaptured.toFixed(2)}`;
+      statFills.innerHTML = `${state.fills} <span class="text-xs text-gray-500 font-normal">/ ${state.totalOrders}</span>`;
+      statMaxDd.textContent = `${state.maxDrawdown.toFixed(2)}%`;
+
+      // Sharpe Ratio approximation
+      if (state.equityHistory.length > 5) {
+        const returns = [];
+        for (let i = 1; i < state.equityHistory.length; i++) {
+          returns.push(state.equityHistory[i] - state.equityHistory[i - 1]);
+        }
+        const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+        const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
+        const std = Math.sqrt(variance) || 1;
+        const sharpe = (mean / std) * Math.sqrt(252);
+        statSharpe.textContent = isNaN(sharpe) ? "0.00" : sharpe.toFixed(2);
+      }
+    }
+
+    // DRAW ORDER BOOK CANVAS
+    function renderLOB() {
+      const w = canvasLOB.width;
+      const h = canvasLOB.height;
+      ctxLOB.clearRect(0, 0, w, h);
+
+      const rowH = (h - 20) / 7;
+
+      // Draw Center Midline
+      ctxLOB.strokeStyle = '#1e283d';
+      ctxLOB.lineWidth = 1;
+      ctxLOB.beginPath();
+      ctxLOB.moveTo(w / 2, 0);
+      ctxLOB.lineTo(w / 2, h);
+      ctxLOB.stroke();
+
+      // BIDS (LEFT SIDE)
+      state.bids.forEach((b, i) => {
+        const barW = Math.min((b.size / 300) * (w / 2 - 40), w / 2 - 40);
+        const y = 10 + i * rowH;
+
+        ctxLOB.fillStyle = b.isMine ? 'rgba(0, 245, 155, 0.35)' : 'rgba(0, 245, 155, 0.12)';
+        ctxLOB.fillRect(w / 2 - barW, y, barW, rowH - 3);
+
+        ctxLOB.font = '11px JetBrains Mono';
+        ctxLOB.fillStyle = b.isMine ? '#00f59b' : '#68d391';
+        ctxLOB.textAlign = 'right';
+        ctxLOB.fillText(`$${b.price}`, w / 2 - 10, y + rowH * 0.7);
+
+        ctxLOB.fillStyle = '#a0aec0';
+        ctxLOB.textAlign = 'left';
+        ctxLOB.fillText(`${b.size}${b.isMine ? ' [YOU]' : ''}`, 10, y + rowH * 0.7);
+      });
+
+      // ASKS (RIGHT SIDE)
+      state.asks.forEach((a, i) => {
+        const barW = Math.min((a.size / 300) * (w / 2 - 40), w / 2 - 40);
+        const y = 10 + i * rowH;
+
+        ctxLOB.fillStyle = a.isMine ? 'rgba(255, 59, 105, 0.35)' : 'rgba(255, 59, 105, 0.12)';
+        ctxLOB.fillRect(w / 2, y, barW, rowH - 3);
+
+        ctxLOB.font = '11px JetBrains Mono';
+        ctxLOB.fillStyle = a.isMine ? '#ff3b69' : '#fc8181';
+        ctxLOB.textAlign = 'left';
+        ctxLOB.fillText(`$${a.price}`, w / 2 + 10, y + rowH * 0.7);
+
+        ctxLOB.fillStyle = '#a0aec0';
+        ctxLOB.textAlign = 'right';
+        ctxLOB.fillText(`${a.size}${a.isMine ? ' [YOU]' : ''}`, w - 10, y + rowH * 0.7);
+      });
+    }
+
+    // DRAW EQUITY CURVE
+    function renderEquity() {
+      const w = canvasEquity.width;
+      const h = canvasEquity.height;
+      ctxEquity.clearRect(0, 0, w, h);
+
+      if (state.equityHistory.length < 2) return;
+
+      const minVal = Math.min(0, ...state.equityHistory);
+      const maxVal = Math.max(10, ...state.equityHistory);
+      const range = (maxVal - minVal) || 1;
+
+      // Draw zero line
+      const zeroY = h - ((0 - minVal) / range) * (h - 20) - 10;
+      ctxEquity.strokeStyle = '#2d3748';
+      ctxEquity.setLineDash([4, 4]);
+      ctxEquity.beginPath();
+      ctxEquity.moveTo(0, zeroY);
+      ctxEquity.lineTo(w, zeroY);
+      ctxEquity.stroke();
+      ctxEquity.setLineDash([]);
+
+      // Draw curve
+      ctxEquity.strokeStyle = state.pnl >= 0 ? '#00f59b' : '#ff3b69';
+      ctxEquity.lineWidth = 2;
+      ctxEquity.beginPath();
+
+      const step = w / (state.equityHistory.length - 1);
+      state.equityHistory.forEach((val, idx) => {
+        const x = idx * step;
+        const y = h - ((val - minVal) / range) * (h - 20) - 10;
+        if (idx === 0) ctxEquity.moveTo(x, y);
+        else ctxEquity.lineTo(x, y);
+      });
+      ctxEquity.stroke();
+    }
+
+    // SIM CONTROL FUNCTIONS
+    function startSim() {
+      if (state.roundsPlayed >= 3) {
+        proModal.classList.remove('hidden');
+        return;
+      }
+      if (!state.isRunning) {
+        state.isRunning = true;
+        simInterval = setInterval(tick, 200);
+        btnStart.textContent = '● RUNNING MARKET MAKING SIM';
+        btnStart.classList.remove('from-quant-green', 'to-quant-cyan');
+        btnStart.classList.add('from-dark-700', 'to-dark-600', 'text-gray-300');
+        btnPause.disabled = false;
+      }
+    }
+
+    function pauseSim() {
+      state.isRunning = false;
+      clearInterval(simInterval);
+      btnStart.textContent = '▶ RESUME SIMULATION';
+      btnStart.classList.add('from-quant-green', 'to-quant-cyan');
+      btnStart.classList.remove('from-dark-700', 'to-dark-600', 'text-gray-300');
+      btnPause.disabled = true;
+    }
+
+    function resetSim() {
+      pauseSim();
+      state.tick = 0;
+      state.midPrice = 100.00;
+      state.pnl = 0.00;
+      state.cash = 0.00;
+      state.inventory = 0;
+      state.spreadCaptured = 0.00;
+      state.fills = 0;
+      state.totalOrders = 0;
+      state.maxDrawdown = 0.00;
+      state.peakEquity = 0.00;
+      state.equityHistory = [0];
+      btnStart.textContent = '▶ START MARKET MAKING ROUND';
+      renderUI();
+      generateOrderBook();
+      renderLOB();
+      renderEquity();
+    }
+
+    btnStart.addEventListener('click', startSim);
+    btnPause.addEventListener('click', pauseSim);
+    btnReset.addEventListener('click', resetSim);
+
+    upgradeCtaNav.addEventListener('click', () => proModal.classList.remove('hidden'));
+    modalClose.addEventListener('click', () => proModal.classList.add('hidden'));
+
+    // EMAIL LEAD CAPTURE
+    document.getElementById('lead-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.getElementById('lead-success').classList.remove('hidden');
+      setTimeout(() => proModal.classList.add('hidden'), 1500);
+    });
+
+    // INIT
+    generateOrderBook();
+    renderLOB();
+    renderEquity();
+  </script>
+</body>
+</html>
